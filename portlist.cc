@@ -764,7 +764,9 @@ int PortList::nextIgnoredState(int prevstate) {
 
 /* Returns true if a state should be ignored (consolidated), false otherwise */
 bool PortList::isIgnoredState(int state) {
-
+#if 1
+  return false;
+#else
   if (o.debugging > 2)
     return false;
 
@@ -794,6 +796,7 @@ bool PortList::isIgnoredState(int state) {
     return true;
 
   return false;
+#endif
 }
 
 int PortList::numIgnoredStates() {
