@@ -494,6 +494,9 @@ static char *formatScriptOutput(const ScriptResult &sr) {
 }
 #endif /* NOLUA */
 
+/* Output a list of ports, compressing ranges like 80-85 */
+static void output_rangelist_given_ports(int logt, unsigned short *ports, int numports);
+
 /* Prints the familiar Nmap tabular output showing the "interesting"
    ports found on the machine.  It also handles the Machine/Grepable
    output and the XML output.  It is pretty ugly -- in particular I
@@ -521,9 +524,14 @@ void printportoutput(Target *currenths, PortList *plist) {
   int colno = 0;
   unsigned int rowno;
   int numrows;
+  state_reason_summary_t *reasons, *currentr;
+
   std::vector<const char *> saved_servicefps;
 
-  if (o.noportscan)
+  int numignoredports = plist->numIgnoredPorts();
+  int numports = plist->numPorts();
+
+  if (o.noportscan || numports == 0)
     return;
 
   xml_start_tag("ports");
@@ -616,9 +624,6 @@ void printportoutput(Target *currenths, PortList *plist) {
     prevstate = istate;
   }
 
-  int numignoredports = plist->numIgnoredPorts();
-  int numports = plist->numPorts();
-
   if (numignoredports == numports) {
     if (numignoredports == 0) {
       log_write(LOG_PLAIN, "0 ports scanned on %s\n",
@@ -653,6 +658,9 @@ void printportoutput(Target *currenths, PortList *plist) {
     return;
   }
 
+  log_write(LOG_MACHINE, "Host: %s (%s)", currenths->targetipstr(),
+            currenths->HostName());
+
   if ((o.verbose > 1 || o.debugging) && currenths->StartTime()) {
     time_t tm_secs, tm_sece;
     struct tm tm;
@@ -678,35 +686,82 @@ void printportoutput(Target *currenths, PortList *plist) {
       }
     }
   }
-  log_write(LOG_MACHINE, "Host: %s (%s)", currenths->targetipstr(),
-            currenths->HostName());
 
-  /* Show line like:
-     Not shown: 3995 closed ports, 514 filtered ports
-     if appropriate (note that states are reverse-sorted by # of ports) */
-  prevstate = PORT_UNKNOWN;
+  int prevstate = PORT_UNKNOWN;
+  int istate;
+
   while ((istate = plist->nextIgnoredState(prevstate)) != PORT_UNKNOWN) {
-    if (prevstate == PORT_UNKNOWN)
+    i = plist->getStateCounts(istate);
+    xml_open_start_tag("extraports");
+    xml_attribute("state", "%s", statenum2str(istate));
+    xml_attribute("count", "%d", i);
+    xml_close_start_tag();
+    xml_newline();
+
+    /* Show line like:
+       Not shown: 98 open|filtered udp ports (no-response), 59 closed tcp ports (reset)
+       if appropriate (note that states are reverse-sorted by # of ports) */
+    if (prevstate == PORT_UNKNOWN) {
+      // First time through, check special case
+      if (numignoredports == numports) {
+        log_write(LOG_PLAIN, "All %d scanned ports on %s are in ignored states.\n",
+            numignoredports, currenths->NameIP(hostname, sizeof(hostname)));
+        log_write(LOG_MACHINE, "\t%s: ", (o.ipprotscan) ? "Protocols" : "Ports");
+        /* Grepable output supports only one ignored state. */
+        if (plist->numIgnoredStates() == 1) {
+          log_write(LOG_MACHINE, "\tIgnored State: %s (%d)", statenum2str(istate), i);
+        }
+      }
       log_write(LOG_PLAIN, "Not shown: ");
-    else
+    } else {
       log_write(LOG_PLAIN, ", ");
-    char desc[32];
-    if (o.ipprotscan)
-      Snprintf(desc, sizeof(desc),
-               (plist->getStateCounts(istate) ==
-                1) ? "protocol" : "protocols");
-    else
-      Snprintf(desc, sizeof(desc),
-               (plist->getStateCounts(istate) == 1) ? "port" : "ports");
-    log_write(LOG_PLAIN, "%d %s %s", plist->getStateCounts(istate),
-              statenum2str(istate), desc);
+    }
+
+    if((currentr = reasons = get_state_reason_summary(plist, istate)) == NULL) {
+      log_write(LOG_PLAIN, "%d %s %s%s", i, statenum2str(istate),
+          o.ipprotscan ? "protocol" : "port",
+          plist->getStateCounts(istate) == 1 ? "" : "s");
+      prevstate = istate;
+      continue;
+    }
+
+    while(currentr != NULL) {
+      if(currentr->count > 0) {
+        xml_open_start_tag("extrareasons");
+        xml_attribute("reason", "%s", reason_str(currentr->reason_id, SINGULAR));
+        xml_attribute("count", "%d", currentr->count);
+        xml_attribute("proto", "%s", IPPROTO2STR(currentr->proto));
+        xml_write_raw(" ports=\"");
+        output_rangelist_given_ports(LOG_XML, currentr->ports, currentr->count);
+        xml_write_raw("\"");
+        xml_close_empty_tag();
+        xml_newline();
+
+        if (currentr != reasons)
+          log_write(LOG_PLAIN, ", ");
+        log_write(LOG_PLAIN, "%d %s %s %s%s (%s)",
+            currentr->count, statenum2str(istate), IPPROTO2STR(currentr->proto),
+            o.ipprotscan ? "protocol" : "port",
+            plist->getStateCounts(istate) == 1 ? "" : "s",
+            reason_str(currentr->reason_id, SINGULAR));
+      }
+      currentr = currentr->next;
+    }
+    state_reason_summary_dinit(reasons);
+    xml_end_tag();
+    xml_newline();
     prevstate = istate;
   }
 
   log_write(LOG_PLAIN, "\n");
 
-  if (o.reason)
-    print_state_summary(plist, STATE_REASON_FULL);
+  if (numignoredports == numports) {
+    // Nothing left to show.
+    xml_end_tag(); /* ports */
+    xml_newline();
+    log_flush_all();
+    return;
+  }
 
   /* OK, now it is time to deal with the service table ... */
   colno = 0;
@@ -750,7 +805,7 @@ void printportoutput(Target *currenths, PortList *plist) {
   if (o.ipprotscan) {
     current = NULL;
     while ((current = plist->nextPort(current, &port, IPPROTO_IP, 0)) != NULL) {
-      if (!plist->isIgnoredState(current->state)) {
+      if (!plist->isIgnoredState(current->state, NULL)) {
         if (!first)
           log_write(LOG_MACHINE, ", ");
         else
@@ -803,7 +858,7 @@ void printportoutput(Target *currenths, PortList *plist) {
 
     current = NULL;
     while ((current = plist->nextPort(current, &port, TCPANDUDPANDSCTP, 0)) != NULL) {
-      if (!plist->isIgnoredState(current->state)) {
+      if (!plist->isIgnoredState(current->state, NULL)) {
         if (!first)
           log_write(LOG_MACHINE, ", ");
         else
@@ -939,10 +994,16 @@ void printportoutput(Target *currenths, PortList *plist) {
 }
 
 
+/* MAX_STRFTIME_EXPANSION is the maximum length that a single %_ escape can
+ * expand to, not including null terminator. If you add another supported
+ * escape, check that it doesn't exceed this value, otherwise increase it.
+ */
+#define MAX_STRFTIME_EXPANSION 10
 char *logfilename(const char *str, struct tm *tm) {
   char *ret, *end, *p;
-  char tbuf[10];
-  int retlen = strlen(str) * 6 + 1;
+  // Max expansion: "%F" => "YYYY-mm-dd"
+  int retlen = strlen(str) * (MAX_STRFTIME_EXPANSION - 2) + 1;
+  size_t written = 0;
 
   ret = (char *) safe_malloc(retlen);
   end = ret + retlen;
@@ -950,52 +1011,34 @@ char *logfilename(const char *str, struct tm *tm) {
   for (p = ret; *str; str++) {
     if (*str == '%') {
       str++;
+      written = 0;
 
       if (!*str)
         break;
 
+#define FTIME_CASE(_fmt, _fmt_str) case _fmt: \
+        written = strftime(p, end - p, _fmt_str, tm); \
+        break;
+
       switch (*str) {
-      case 'H':
-        strftime(tbuf, sizeof tbuf, "%H", tm);
-        break;
-      case 'M':
-        strftime(tbuf, sizeof tbuf, "%M", tm);
-        break;
-      case 'S':
-        strftime(tbuf, sizeof tbuf, "%S", tm);
-        break;
-      case 'T':
-        strftime(tbuf, sizeof tbuf, "%H%M%S", tm);
-        break;
-      case 'R':
-        strftime(tbuf, sizeof tbuf, "%H%M", tm);
-        break;
-      case 'm':
-        strftime(tbuf, sizeof tbuf, "%m", tm);
-        break;
-      case 'd':
-        strftime(tbuf, sizeof tbuf, "%d", tm);
-        break;
-      case 'y':
-        strftime(tbuf, sizeof tbuf, "%y", tm);
-        break;
-      case 'Y':
-        strftime(tbuf, sizeof tbuf, "%Y", tm);
-        break;
-      case 'D':
-        strftime(tbuf, sizeof tbuf, "%m%d%y", tm);
-        break;
-      case 'F':
-        strftime(tbuf, sizeof tbuf, "%Y-%m-%d", tm);
-        break;
+        FTIME_CASE('H', "%H");
+        FTIME_CASE('M', "%M");
+        FTIME_CASE('S', "%S");
+        FTIME_CASE('T', "%H%M%S");
+        FTIME_CASE('R', "%H%M");
+        FTIME_CASE('m', "%m");
+        FTIME_CASE('d', "%d");
+        FTIME_CASE('y', "%y");
+        FTIME_CASE('Y', "%Y");
+        FTIME_CASE('D', "%m%d%y");
+        FTIME_CASE('F', "%Y-%m-%d");
       default:
         *p++ = *str;
         continue;
       }
 
       assert(end - p > 1);
-      Strncpy(p, tbuf, end - p - 1);
-      p += strlen(tbuf);
+      p += written;
     } else {
       *p++ = *str;
     }
@@ -1170,14 +1213,14 @@ int log_open(int logt, bool append, char *filename) {
     o.logfd[i] = stdout;
     o.nmap_stdout = fopen(DEVNULL, "w");
     if (!o.nmap_stdout)
-      fatal("Could not assign %s to stdout for writing", DEVNULL);
+      pfatal("Could not assign %s to stdout for writing", DEVNULL);
   } else {
     if (append)
       o.logfd[i] = fopen(filename, "a");
     else
       o.logfd[i] = fopen(filename, "w");
     if (!o.logfd[i])
-      fatal("Failed to open %s output file %s for writing", logtypes[i],
+      pfatal("Failed to open %s output file %s for writing", logtypes[i],
             filename);
   }
   return 1;
@@ -2542,7 +2585,7 @@ void printStatusMessage() {
   gettimeofday(&tv, NULL);
   int time = (int) (o.TimeSinceStart(&tv));
 
-  log_write(LOG_STDOUT, "Stats: %d:%02d:%02d elapsed; %d hosts completed (%d up), %d undergoing %s\n",
+  log_write(LOG_STDOUT, "Stats: %d:%02d:%02d elapsed; %u hosts completed (%u up), %d undergoing %s\n",
             time / 60 / 60, time / 60 % 60, time % 60, o.numhosts_scanned,
             o.numhosts_up, o.numhosts_scanning,
             scantype2str(o.current_scantype));
@@ -2581,9 +2624,9 @@ void print_xml_finished_open(time_t timep, const struct timeval *tv) {
 
 void print_xml_hosts() {
   xml_open_start_tag("hosts");
-  xml_attribute("up", "%d", o.numhosts_up);
-  xml_attribute("down", "%d", o.numhosts_scanned - o.numhosts_up);
-  xml_attribute("total", "%d", o.numhosts_scanned);
+  xml_attribute("up", "%u", o.numhosts_up);
+  xml_attribute("down", "%u", o.numhosts_scanned - o.numhosts_up);
+  xml_attribute("total", "%u", o.numhosts_scanned);
   xml_close_empty_tag();
 }
 

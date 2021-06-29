@@ -459,7 +459,6 @@ HostScanStats::HostScanStats(Target *t, UltraScanInfo *UltraSI) {
   lastping_sent_numprobes = 0;
   nxtpseq = 1;
   max_successful_tryno = 0;
-  tryno_mayincrease = true;
   ports_finished = 0;
   numprobes_sent = 0;
   memset(&completiontime, 0, sizeof(completiontime));
@@ -542,7 +541,7 @@ bool HostScanStats::sendOK(struct timeval *when) {
   struct timeval probe_to, earliest_to, sendTime;
   long tdiff;
 
-  if (target->timedOut(&USI->now) || completed()) {
+  if ((!USI->ping_scan && target->timedOut(&USI->now)) || completed()) {
     if (when)
       *when = USI->now;
     return false;
@@ -668,6 +667,7 @@ unsigned int HostScanStats::allowedTryno(bool *capped, bool *mayincrease) {
   std::list<UltraProbe *>::iterator probeI;
   UltraProbe *probe = NULL;
   bool allfinished = true;
+  bool tryno_mayincrease = true;
   unsigned int maxval = 0;
 
   /* TODO: This should perhaps differ by scan type. */
@@ -680,7 +680,7 @@ unsigned int HostScanStats::allowedTryno(bool *capped, bool *mayincrease) {
   } else if (capped) *capped = false;
 
   /* Decide if the tryno can possibly increase.  */
-  if (tryno_mayincrease && num_probes_active == 0 && freshPortsLeft() == 0) {
+  if (tryno_mayincrease && num_probes_active == 0 && !freshPortsLeft()) {
     /* If every outstanding probe is timedout and at maxval, then no further
        retransmits are necessary. */
     for (probeI = probes_outstanding.begin();
@@ -1152,6 +1152,9 @@ int UltraScanInfo::removeCompletedHosts() {
 
       TIMEVAL_MSEC_ADD(compare, hss->completiontime, completedHostLifetime);
       if (TIMEVAL_AFTER(now, compare) ) {
+        /* Any active probes in completed hosts count against our global
+         * cwnd, so be sure to remove them or we can run out of space. */
+        hss->destroyAllOutstandingProbes();
         completedHosts.erase(hostI);
         hostsRemoved++;
       }
@@ -1164,8 +1167,8 @@ int UltraScanInfo::removeCompletedHosts() {
     nxt = hostI;
     nxt++;
     hss = *hostI;
-    timedout = hss->target->timedOut(&now);
-    if (hss->completed() || timedout) {
+    // Don't bother checking timedOut for discovery scans or if the target is already completed.
+    if (hss->completed() || (timedout = (!ping_scan) && hss->target->timedOut(&now)) != false) {
       /* A host to remove!  First adjust nextI appropriately */
       if (nextI == hostI && incompleteHosts.size() > 1) {
         nextI++;
@@ -1467,8 +1470,49 @@ static int get_next_target_probe(UltraScanInfo *USI, HostScanStats *hss,
   return -1;
 }
 
+/* Returns whether there are ports remaining to probe */
+bool HostScanStats::freshPortsLeft() {
+  if (USI->tcp_scan) {
+    return (next_portidx < USI->ports->tcp_count);
+  } else if (USI->udp_scan) {
+    return (next_portidx < USI->ports->udp_count);
+  } else if (USI->sctp_scan) {
+    return (next_portidx < USI->ports->sctp_count);
+  } else if (USI->prot_scan) {
+    return (next_portidx < USI->ports->prot_count);
+  } else if (USI->ping_scan_arp || USI->ping_scan_nd) {
+    return !sent_arp;
+  } else if (USI->ping_scan) {
+    if (USI->ptech.rawtcpscan) {
+      if (o.pingtype & PINGTYPE_TCP_USE_ACK && next_ackportpingidx < USI->ports->ack_ping_count)
+        return true;
+      if (o.pingtype & PINGTYPE_TCP_USE_SYN && next_synportpingidx < USI->ports->syn_ping_count)
+        return true;
+    }
+    if (USI->ptech.rawicmpscan) {
+      if ((o.pingtype & PINGTYPE_ICMP_PING) && !sent_icmp_ping)
+        return true;
+      if ((o.pingtype & PINGTYPE_ICMP_MASK) && !sent_icmp_mask)
+        return true;
+      if ((o.pingtype & PINGTYPE_ICMP_TS) && !sent_icmp_ts)
+        return true;
+    }
+    if (USI->ptech.connecttcpscan && next_synportpingidx < USI->ports->syn_ping_count)
+      return true;
+    if (USI->ptech.rawudpscan && next_udpportpingidx < USI->ports->udp_ping_count)
+      return true;
+    if (USI->ptech.rawsctpscan && next_sctpportpingidx < USI->ports->sctp_ping_count)
+      return true;
+    if (USI->ptech.rawprotoscan && next_protoportpingidx < USI->ports->proto_ping_count)
+      return true;
+    return false;
+  }
+  assert(0);
+  return false;
+}
+
 /* Returns the number of ports remaining to probe */
-int HostScanStats::freshPortsLeft() {
+int HostScanStats::numFreshPortsLeft() {
   if (USI->tcp_scan) {
     if (next_portidx >= USI->ports->tcp_count)
       return 0;
@@ -1496,16 +1540,14 @@ int HostScanStats::freshPortsLeft() {
   } else if (USI->ping_scan) {
     unsigned int num_probes = 0;
     if (USI->ptech.rawtcpscan) {
-      if ((o.pingtype & PINGTYPE_TCP_USE_ACK)
-          && next_ackportpingidx < USI->ports->ack_ping_count)
+      if (o.pingtype & PINGTYPE_TCP_USE_ACK)
         num_probes += USI->ports->ack_ping_count - next_ackportpingidx;
-      if ((o.pingtype & PINGTYPE_TCP_USE_SYN)
-          && next_synportpingidx < USI->ports->syn_ping_count)
+      if (o.pingtype & PINGTYPE_TCP_USE_SYN)
         num_probes += USI->ports->syn_ping_count - next_synportpingidx;
     }
-    if (USI->ptech.rawudpscan && next_udpportpingidx < USI->ports->udp_ping_count)
+    if (USI->ptech.rawudpscan)
       num_probes += USI->ports->udp_ping_count - next_udpportpingidx;
-    if (USI->ptech.rawsctpscan && next_sctpportpingidx < USI->ports->sctp_ping_count)
+    if (USI->ptech.rawsctpscan)
       num_probes += USI->ports->sctp_ping_count - next_sctpportpingidx;
     if (USI->ptech.rawicmpscan) {
       if ((o.pingtype & PINGTYPE_ICMP_PING) && !sent_icmp_ping)
@@ -1517,7 +1559,7 @@ int HostScanStats::freshPortsLeft() {
     }
     if (USI->ptech.rawprotoscan)
       num_probes += USI->ports->proto_ping_count - next_protoportpingidx;
-    if (USI->ptech.connecttcpscan && next_synportpingidx < USI->ports->syn_ping_count)
+    if (USI->ptech.connecttcpscan)
       num_probes += USI->ports->syn_ping_count - next_synportpingidx;
     return num_probes;
   }
@@ -1685,7 +1727,7 @@ bool HostScanStats::completed() {
 
   /* With other types of scan, we are done when there are no more ports to
      probe. */
-  return freshPortsLeft() == 0;
+  return !freshPortsLeft();
 }
 
 /* This function provides the proper cwnd and ssthresh to use.  It may
@@ -1972,8 +2014,8 @@ static bool ultrascan_host_pspec_update(UltraScanInfo *USI, HostScanStats *hss,
   int oldstate = hss->target->flags;
   /* If the host is already up, ignore any further updates. */
   if (hss->target->flags != HOST_UP) {
-    assert(newstate == HOST_UP || newstate == HOST_DOWN);
-    hss->target->flags = newstate;
+    // don't allow HOST_UNKNOWN to override a known state.
+    hss->target->flags = (newstate == HOST_UNKNOWN ? oldstate : newstate);
     /* For port scans (not -sn) where output may be delayed until more scan
      * phases are done, emit a hosthint element during host discovery when a
      * target is found to be up. */
@@ -1986,7 +2028,10 @@ static bool ultrascan_host_pspec_update(UltraScanInfo *USI, HostScanStats *hss,
 }
 
 static void ultrascan_host_timeout_init(UltraScanInfo *USI, HostScanStats *hss) {
-  if (!hss->target->timeOutClockRunning() && !hss->target->timedOut(NULL)) {
+  // Don't count host discovery time against host timeout clock. For large
+  // numbers of targets, we might be busy sending lots of new probes to new
+  // targets, and that time shouldn't count against the individual target.
+  if (!USI->ping_scan && !hss->target->timeOutClockRunning() && !hss->target->timedOut(NULL)) {
     if (o.debugging > 2) {
       log_write(LOG_STDOUT, "Ultrascan timeout init for %s at %.6f\n", hss->target->targetipstr(), TIMEVAL_SECS(USI->now));
     }
@@ -2021,12 +2066,12 @@ void ultrascan_host_probe_update(UltraScanInfo *USI, HostScanStats *hss,
   bool adjust_timing = adjust_timing_hint;
   bool adjust_ping = adjust_timing_hint;
 
-  /* If we got a response that meant "down", then it was an ICMP error. These
+  /* If we got a response that meant "down" or "unknown", then it was an ICMP error. These
      are often rate-limited (RFC 1812) or generated by a different host. We only
      allow such responses to increase, not decrease, scanning speed by
      disallowing drops (probe->tryno > 0), and we don't allow changing the ping
      probe to something that's likely to get dropped. */
-  if (rcvdtime != NULL && newstate == HOST_DOWN) {
+  if (rcvdtime != NULL && newstate != HOST_UP) {
     if (probe->tryno > 0) {
       if (adjust_timing && o.debugging > 1)
         log_write(LOG_PLAIN, "Response for %s means new state is down; not adjusting timing.\n", hss->target->targetipstr());
@@ -2409,7 +2454,14 @@ static void doAnyOutstandingRetransmits(UltraScanInfo *USI) {
         probeI--;
         probe = *probeI;
         if (probe->timedout && !probe->retransmitted &&
-            maxtries > probe->tryno && !probe->isPing()) {
+            (maxtries > probe->tryno ||
+            // We may exceed maxtries if this is UDP...
+             ((USI->udp_scan || (USI->ping_scan && USI->ptech.rawudpscan))
+             // ...and we haven't exceeded the manually-set max_retries
+              && USI->perf.tryno_cap > probe->tryno
+             // ...and there are more payloads we haven't tried.
+              && udp_payload_count(probe->dport()) > probe->tryno)
+            ) && !probe->isPing()) {
           /* For rate limit detection, we delay the first time a new tryno
              is seen, as long as we are scanning at least 2 ports */
           if (probe->tryno + 1 > (int) host->rld.max_tryno_sent &&
@@ -2464,7 +2516,7 @@ static void printAnyStats(UltraScanInfo *USI) {
         hss = *hostI;
         hss->getTiming(&hosttm);
         log_write(LOG_PLAIN, "   %s: %d/%d/%d/%d/%d/%d %.2f/%d/%d %li/%d/%d\n", hss->target->targetipstr(),
-                  hss->num_probes_active, hss->freshPortsLeft(),
+                  hss->num_probes_active, hss->numFreshPortsLeft(),
                   (int) hss->retry_stack.size(),
                   hss->num_probes_outstanding(),
                   hss->num_probes_waiting_retransmit, (int) hss->probe_bench.size(),

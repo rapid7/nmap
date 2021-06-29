@@ -318,7 +318,8 @@ public:
   Target *target; /* A copy of the Target that these stats refer to. */
   HostScanStats(Target *t, UltraScanInfo *UltraSI);
   ~HostScanStats();
-  int freshPortsLeft(); /* Returns the number of ports remaining to probe */
+  bool freshPortsLeft(); /* Returns true if there are ports remaining to probe */
+  int numFreshPortsLeft(); /* Returns the number of ports remaining to probe */
   int next_portidx; /* Index of the next port to probe in the relevant
                        ports array in USI.ports */
   bool sent_arp; /* Has an ARP probe been sent for the target yet? */
@@ -484,10 +485,6 @@ public:
   /* This is the highest try number that has produced useful results
      (such as port status change). */
   unsigned int max_successful_tryno;
-  /* This starts as true because tryno may increase based on results, but
-     it becomes false if it becomes clear that tryno will not increase
-     further during the scan */
-  bool tryno_mayincrease;
   int ports_finished; /* The number of ports of this host that have been determined */
   int numprobes_sent; /* Number of port probes (not counting pings, but counting retransmits) sent to this host */
   /* Boost the scan delay for this host, usually because too many packet

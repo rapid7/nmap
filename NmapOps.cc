@@ -257,6 +257,7 @@ void NmapOps::Initialize() {
   max_ips_to_scan = 0;
   extra_payload_length = 0;
   extra_payload = NULL;
+  host_timeout = 0;
   scan_delay = 0;
   open_only = false;
   scanflags = -1;
@@ -297,6 +298,7 @@ void NmapOps::Initialize() {
   deprecated_xml_osclass = false;
   always_resolve = false;
   resolve_all = false;
+  unique = false;
   dns_servers = NULL;
   implicitARPPing = true;
   numhosts_scanned = 0;

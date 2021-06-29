@@ -627,14 +627,14 @@ int get_ping_pcap_result(UltraScanInfo *USI, struct timeval *stime) {
           if (probe->protocol() != encaps_hdr.proto ||
               sockaddr_storage_cmp(&target_src, &hdr.dst) != 0 ||
               sockaddr_storage_cmp(&target_src, &encaps_hdr.src) != 0 ||
-              sockaddr_storage_cmp(&target_dst, &encaps_hdr.dst) != 0 ||
-              ((probe->protocol() == IPPROTO_ICMP || probe->protocol() == IPPROTO_ICMPV6) &&
-               ntohs(ping->id) != probe->icmpid()))
+              sockaddr_storage_cmp(&target_dst, &encaps_hdr.dst) != 0)
             continue;
 
           if ((encaps_hdr.proto == IPPROTO_ICMP || encaps_hdr.proto == IPPROTO_ICMPV6)
               && USI->ptech.rawicmpscan) {
             /* The response was based on a ping packet we sent */
+            if (probe->icmpid() != ntohs(((struct icmp *) encaps_data)->icmp_id))
+              continue;
           } else if (encaps_hdr.proto == IPPROTO_TCP && USI->ptech.rawtcpscan) {
             struct tcp_hdr *tcp = (struct tcp_hdr *) encaps_data;
             if (probe->dport() != ntohs(tcp->th_dport) ||
@@ -666,44 +666,63 @@ int get_ping_pcap_result(UltraScanInfo *USI, struct timeval *stime) {
         if (probenum >= listsz)
           continue;
 
+        /* Destination unreachable. */
         if ((hdr.proto == IPPROTO_ICMP && ping->type == 3)
             || (hdr.proto == IPPROTO_ICMPV6 && ping->type == 1)) {
-          /* Destination unreachable. */
-          if (sockaddr_storage_cmp(&target_dst, &hdr.src) == 0) {
+          // If it's Port or Proto unreachable and the address matches, it's up.
+          if (((hdr.proto == IPPROTO_ICMP && (ping->code == 2 || ping->code == 3))
+                || (hdr.proto == IPPROTO_ICMPV6 && ping->code == 4))
+                && sockaddr_storage_cmp(&target_dst, &hdr.src) == 0) {
             /* The ICMP or ICMPv6 error came directly from the target, so it's up. */
             goodone = true;
             newstate = HOST_UP;
-          } else {
-            goodone = true;
-            newstate = HOST_DOWN;
+            if (o.debugging) {
+              log_write(LOG_STDOUT, "Got port/proto unreachable for %s\n", hss->target->targetipstr());
+            }
           }
-          if (o.debugging) {
-            if ((hdr.proto == IPPROTO_ICMP && ping->code == 3)
-                || (hdr.proto == IPPROTO_ICMPV6 && ping->code == 4))
-              log_write(LOG_STDOUT, "Got port unreachable for %s\n", hss->target->targetipstr());
-            else
+          else {
+            /* For other codes, see RFC 1122:
+             * A Destination Unreachable message that is received with code
+             * 0 (Net), 1 (Host), or 5 (Bad Source Route) may result from a
+             * routing transient and MUST therefore be interpreted as only
+             * a hint, not proof, that the specified destination is unreachable
+             */
+            // Still, it's a response so we should destroy the matching probe.
+            goodone = true;
+            newstate = HOST_UNKNOWN;
+            adjust_timing = false;
+            if (o.debugging) {
               log_write(LOG_STDOUT, "Got destination unreachable for %s\n", hss->target->targetipstr());
+            }
           }
         } else if ((hdr.proto == IPPROTO_ICMP && ping->type == 11)
                    || (hdr.proto == IPPROTO_ICMPV6 && ping->type == 3)) {
           if (o.debugging)
             log_write(LOG_STDOUT, "Got Time Exceeded for %s\n", hss->target->targetipstr());
-        } else if (hdr.proto == IPPROTO_ICMP && ping->type == 4) {
-          if (o.debugging)
-            log_write(LOG_STDOUT, "Got ICMP source quench\n");
-          usleep(50000);
-        } else if (hdr.proto == IPPROTO_ICMPV6 && ping->type == 4) {
-          if (o.debugging)
-            log_write(LOG_STDOUT, "Got ICMPv6 Parameter Problem\n");
+          goodone = 1;
+          newstate = HOST_DOWN;
+          /* I don't want anything to do with timing this. */
+          adjust_timing = false;
         } else if (hdr.proto == IPPROTO_ICMP) {
-          if (o.debugging) {
-            log_write(LOG_STDOUT, "Got ICMP message type %d code %d\n",
-                      ping->type, ping->code);
+          if (ping->type == 4) {
+            if (o.debugging)
+              log_write(LOG_STDOUT, "Got ICMP source quench\n");
+            usleep(50000);
+          } else {
+            if (o.debugging) {
+              log_write(LOG_STDOUT, "Got ICMP message type %d code %d\n",
+                  ping->type, ping->code);
+            }
           }
         } else if (hdr.proto == IPPROTO_ICMPV6) {
-          if (o.debugging)
-            log_write(LOG_STDOUT, "Got ICMPv6 message type %d code %d\n",
-                      ping->type, ping->code);
+          if (ping->type == 4) {
+            if (o.debugging)
+              log_write(LOG_STDOUT, "Got ICMPv6 Parameter Problem\n");
+          } else {
+            if (o.debugging)
+              log_write(LOG_STDOUT, "Got ICMPv6 message type %d code %d\n",
+                  ping->type, ping->code);
+          }
         }
       }
     } else if (hdr.proto == IPPROTO_TCP && USI->ptech.rawtcpscan) {
@@ -966,35 +985,69 @@ void begin_sniffer(UltraScanInfo *USI, std::vector<Target *> &Targets) {
     source_len = sizeof(source);
     Targets[0]->SourceSockAddr(&source, &source_len);
 
+    pcap_filter = "dst host ";
+    pcap_filter += inet_ntop_ez(&source, sizeof(source));
     if (doIndividual) {
-      pcap_filter = "dst host ";
-      pcap_filter += inet_ntop_ez(&source, sizeof(source));
       pcap_filter += " and (icmp or icmp6 or (";
       pcap_filter += dst_hosts;
       pcap_filter += "))";
-    } else {
-      pcap_filter = "dst host ";
-      pcap_filter += inet_ntop_ez(&source, sizeof(source));
     }
   } else if (USI->tcp_scan || USI->udp_scan || USI->sctp_scan || USI->ping_scan) {
     struct sockaddr_storage source;
     size_t source_len;
+    bool first = false;
 
     source_len = sizeof(source);
     Targets[0]->SourceSockAddr(&source, &source_len);
 
-    /* Handle udp, tcp and sctp with one filter. */
+    pcap_filter = "dst host ";
+    pcap_filter += inet_ntop_ez(&source, sizeof(source));
+    pcap_filter += " and (icmp or icmp6";
     if (doIndividual) {
-      pcap_filter = "dst host ";
-      pcap_filter += inet_ntop_ez(&source, sizeof(source));
-      pcap_filter += " and (icmp or icmp6 or ((tcp or udp or sctp) and (";
-      pcap_filter += dst_hosts;
-      pcap_filter += ")))";
-    } else {
-      pcap_filter = "dst host ";
-      pcap_filter += inet_ntop_ez(&source, sizeof(source));
-      pcap_filter += " and (icmp or icmp6 or tcp or udp or sctp)";
+      pcap_filter += " or (";
+      first = true;
     }
+    if (USI->tcp_scan || (USI->ping_scan && USI->ptech.rawtcpscan)) {
+      if (!first) {
+        pcap_filter += " or ";
+      }
+      else if (doIndividual) {
+        pcap_filter += "(";
+      }
+      pcap_filter += "tcp";
+      first = false;
+    }
+    if (USI->udp_scan || (USI->ping_scan && USI->ptech.rawudpscan)) {
+      if (!first) {
+        pcap_filter += " or ";
+      }
+      else if (doIndividual) {
+        pcap_filter += "(";
+      }
+      pcap_filter += "udp";
+      first = false;
+    }
+    if (USI->sctp_scan || (USI->ping_scan && USI->ptech.rawsctpscan)) {
+      if (!first) {
+        pcap_filter += " or ";
+      }
+      else if (doIndividual) {
+        pcap_filter += "(";
+      }
+      pcap_filter += "sctp";
+      first = false;
+    }
+    if (doIndividual) {
+      if (!first) {
+        pcap_filter += ") and (";
+      }
+      pcap_filter += dst_hosts;
+      if (!first) {
+        pcap_filter += ")";
+      }
+      pcap_filter += ")";
+    }
+    pcap_filter += ")";
   } else {
     assert(0);
   }

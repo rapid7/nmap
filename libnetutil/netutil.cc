@@ -937,7 +937,7 @@ int pcap_select(pcap_t *p, struct timeval *timeout) {
     return -1;
 
   FD_ZERO(&rfds);
-  FD_SET(fd, &rfds);
+  checked_fd_set(fd, &rfds);
 
   do {
     errno = 0;
@@ -1609,8 +1609,8 @@ static struct dnet_collector_route_nfo *sysroutes_dnet_find_interfaces(struct dn
       char destbuf[INET6_ADDRSTRLEN];
       char gwbuf[INET6_ADDRSTRLEN];
 
-      strncpy(destbuf, inet_ntop_ez(&dcrn->routes[i].dest, sizeof(dcrn->routes[i].dest)), sizeof(destbuf));
-      strncpy(gwbuf, inet_ntop_ez(&dcrn->routes[i].gw, sizeof(dcrn->routes[i].gw)), sizeof(gwbuf));
+      Strncpy(destbuf, inet_ntop_ez(&dcrn->routes[i].dest, sizeof(dcrn->routes[i].dest)), sizeof(destbuf));
+      Strncpy(gwbuf, inet_ntop_ez(&dcrn->routes[i].gw, sizeof(dcrn->routes[i].gw)), sizeof(gwbuf));
       /*
       netutil_error("WARNING: Unable to find appropriate interface for system route to %s/%u gw %s",
         destbuf, dcrn->routes[i].netmask_bits, gwbuf);
@@ -3163,7 +3163,8 @@ static int route_dst_netlink(const struct sockaddr_storage *dst,
   len -= NLMSG_LENGTH(sizeof(*nlmsg));
 
   /* See rtnetlink(7). Anything matching this route is actually unroutable. */
-  if (rtmsg->rtm_type == RTN_UNREACHABLE)
+  if (rtmsg->rtm_type == RTN_UNREACHABLE || rtmsg->rtm_type == RTN_UNSPEC
+    || rtmsg->rtm_type == RTN_BLACKHOLE || rtmsg->rtm_type == RTN_PROHIBIT)
     return 0;
 
   /* Default values to be possibly overridden. */

@@ -1284,7 +1284,7 @@ int readudppacket(const u8 *packet, int readdata) {
    The options checked are MSS, WScale, SackOK, Sack, and Timestamp. */
 static bool validateTCPhdr(const u8 *tcpc, unsigned len) {
   struct tcp_hdr *tcp = (struct tcp_hdr *) tcpc;
-  int hdrlen, optlen;
+  unsigned hdrlen, optlen;
 
   hdrlen = tcp->th_off * 4;
 
@@ -1296,6 +1296,7 @@ static bool validateTCPhdr(const u8 *tcpc, unsigned len) {
   tcpc += sizeof(struct tcp_hdr);
   optlen = hdrlen - sizeof(struct tcp_hdr);
 
+// This macro guarantees optlen does not underflow by returning if optlen < expected
 #define OPTLEN_IS(expected) do { \
   if ((expected) == 0 || optlen < (expected) || hdrlen != (expected)) \
     return false; \
@@ -1347,10 +1348,8 @@ static bool validateTCPhdr(const u8 *tcpc, unsigned len) {
     // Only 1 byte left in options, this has to be NOP or EOL
     return (*tcpc == 0 || *tcpc == 1);
   }
-  else if (optlen < 0) {
-    // Last option claimed to be longer than options list
-    return false;
-  }
+  // There is no way out of the previous loop that does not satisfy optlen == 0 or optlen == 1
+  assert(optlen == 0);
 
   return true;
 }
@@ -1759,7 +1758,7 @@ int recvtime(int sd, char *buf, int len, int seconds, int *timedout) {
   timeout.tv_sec = seconds;
   timeout.tv_usec = 0;
   FD_ZERO(&readfd);
-  FD_SET(sd, &readfd);
+  checked_fd_set(sd, &readfd);
   if (timedout)
     *timedout = 0;
   res = select(sd + 1, &readfd, NULL, NULL, &timeout);

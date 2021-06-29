@@ -2964,7 +2964,7 @@ worth the extra time.</para>
 
       <varlistentry>
         <term><option>--nsock-engine
-        epoll|kqueue|poll|select</option>
+        iocp|epoll|kqueue|poll|select</option>
         <indexterm><primary><option>--nsock-engine</option></primary></indexterm>
         <indexterm><primary>Nsock IO engine</primary></indexterm>
         </term>
@@ -2976,7 +2976,8 @@ available on your system.  Engines are named after the name of the IO
 management facility they leverage.  Engines currently implemented are
 <literal>epoll</literal>, <literal>kqueue</literal>, <literal>poll</literal>,
 and <literal>select</literal>, but not all will be present on any platform.
-Use <command>nmap -V</command> to see which engines are supported.</para>
+By default, Nmap will use the "best" engine, i.e. the first one in this list that is supported.
+Use <command>nmap -V</command> to see which engines are supported on your platform.</para>
 
         </listitem>
       </varlistentry>
@@ -3567,8 +3568,7 @@ work properly.</para>
 
           <para>Asks Nmap to establish TCP connections with a final
           target through supplied chain of one or more HTTP or SOCKS4
-          <indexterm><primary>proxies</primary></indexterm>
-          proxies.  Proxies
+          proxies<indexterm><primary>proxies</primary></indexterm>.  Proxies
           can help hide the true source of a scan or evade certain
           firewall restrictions, but they can hamper scan performance
           by increasing latency.  Users may need to adjust Nmap
@@ -4117,6 +4117,23 @@ hosts with at least one
           append new results to the data files specified in the
           previous execution. Scans can be resumed from any of the 3 major
           output formats: Normal, Grepable, or XML</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term>
+          <option>--noninteractive</option> (Disable runtime interactions)
+          <indexterm><primary><option>--noninteractive</option></primary></indexterm>
+          <indexterm><primary>runtime interaction</primary><secondary>disabling</secondary></indexterm>
+        </term>
+        <listitem>
+
+          <para>At times, such as when running Nmap in a shell background,
+          it might be undesirable for Nmap to monitor and respond to user
+          keyboard input when running. (See
+          <xref linkend="man-runtime-interaction"/> about how to control
+          Nmap during a scan.) Use option <option>--noninteractive</option>
+          to prevent Nmap taking control of the terminal.</para>
         </listitem>
       </varlistentry>
 

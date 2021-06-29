@@ -291,6 +291,7 @@ static void printusage() {
          "  --iflist: Print host interfaces and routes (for debugging)\n"
          "  --append-output: Append to rather than clobber specified output files\n"
          "  --resume <filename>: Resume an aborted scan\n"
+         "  --noninteractive: Disable runtime interactions via keyboard\n"
          "  --stylesheet <path/URL>: XSL stylesheet to transform XML output to HTML\n"
          "  --webxml: Reference stylesheet from Nmap.Org for more portable XML\n"
          "  --no-stylesheet: Prevent associating of XSL stylesheet w/XML output\n"
@@ -593,6 +594,7 @@ void parse_options(int argc, char **argv) {
     {"version-all", no_argument, 0, 0},
     {"system-dns", no_argument, 0, 0},
     {"resolve-all", no_argument, 0, 0},
+    {"unique", no_argument, 0, 0},
     {"log-errors", no_argument, 0, 0},
     {"deprecated-xml-osclass", no_argument, 0, 0},
     {(char*)k, no_argument, 0, 0},
@@ -844,6 +846,8 @@ void parse_options(int argc, char **argv) {
           o.dns_servers = strdup(optarg);
         } else if (strcmp(long_options[option_index].name, "resolve-all") == 0) {
           o.resolve_all = true;
+        } else if (strcmp(long_options[option_index].name, "unique") == 0) {
+          o.unique = true;
         } else if (strcmp(long_options[option_index].name, "log-errors") == 0) {
           /*Nmap Log errors is deprecated and is now always enabled by default.
           This option is left in so as to not break anybody's scanning scripts.
@@ -896,7 +900,7 @@ void parse_options(int argc, char **argv) {
           } else {
             o.inputfd = fopen(optarg, "r");
             if (!o.inputfd) {
-              fatal("Failed to open input file %s for reading", optarg);
+              pfatal("Failed to open input file %s for reading", optarg);
             }
           }
         } else if (strcmp(long_options[option_index].name, "iR") == 0) {
@@ -1066,7 +1070,7 @@ void parse_options(int argc, char **argv) {
       } else {
         o.inputfd = fopen(optarg, "r");
         if (!o.inputfd) {
-          fatal("Failed to open input file %s for reading", optarg);
+          pfatal("Failed to open input file %s for reading", optarg);
         }
       }
       break;
@@ -1121,7 +1125,8 @@ void parse_options(int argc, char **argv) {
           Snprintf(buf, 3, "P%c", *optarg);
           delayed_options.warn_deprecated(buf, "Pn");
         }
-        error("Host discovery disabled (-Pn). All addresses will be marked 'up' and scan times will be slower.");
+        if (o.verbose > 0)
+          error("Host discovery disabled (-Pn). All addresses will be marked 'up' and scan times may be slower.");
         o.pingtype |= PINGTYPE_NONE;
       }
       else if (*optarg == 'R') {
@@ -1363,7 +1368,7 @@ void parse_options(int argc, char **argv) {
         if (o.verbose == 0) {
           o.nmap_stdout = fopen(DEVNULL, "w");
           if (!o.nmap_stdout)
-            fatal("Could not assign %s to stdout for writing", DEVNULL);
+            pfatal("Could not assign %s to stdout for writing", DEVNULL);
         }
       } else {
         const char *p;
@@ -1678,7 +1683,7 @@ void  apply_delayed_options() {
   if (delayed_options.exclude_file) {
     o.excludefd = fopen(delayed_options.exclude_file, "r");
     if (!o.excludefd)
-      fatal("Failed to open exclude file %s for reading", delayed_options.exclude_file);
+      pfatal("Failed to open exclude file %s for reading", delayed_options.exclude_file);
     free(delayed_options.exclude_file);
   }
   o.exclude_spec = delayed_options.exclude_spec;

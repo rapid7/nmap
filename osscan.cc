@@ -489,7 +489,7 @@ void WriteSInfo(char *ostr, int ostrlen, bool isGoodFP,
    No more than n bytes will be written. Unless n is 0, the string is always
    null-terminated. Returns the number of bytes written, excluding the
    terminator. */
-static int test2str(const FingerTest *test, char *s, size_t n) {
+static int test2str(const FingerTest *test, char *s, const size_t n) {
   std::vector<struct AVal>::const_iterator av;
   char *p;
   char *end;
@@ -541,8 +541,7 @@ static int test2str(const FingerTest *test, char *s, size_t n) {
   return p - s;
 
 error:
-  if (n > 0)
-    *s = '\0';
+  *s = '\0';
 
   return -1;
 }
@@ -967,7 +966,7 @@ FingerPrintDB *parse_fingerprint_file(const char *fname) {
 
   fp = fopen(fname, "r");
   if (!fp)
-    fatal("Unable to open Nmap fingerprint file: %s", fname);
+    pfatal("Unable to open Nmap fingerprint file: %s", fname);
 
 top:
   while (fgets(line, sizeof(line), fp)) {

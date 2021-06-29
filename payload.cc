@@ -297,7 +297,7 @@ int init_payloads(void) {
 
   fp = fopen(filename, "r");
   if (fp == NULL) {
-    fprintf(stderr, "Can't open %s for reading.\n", filename);
+    gh_perror("Can't open %s for reading.\n", filename);
     return -1;
   }
   /* Record where this data file was found. */
@@ -315,7 +315,6 @@ int init_payloads(void) {
 const char *udp_port2payload(u16 dport, size_t *length, u8 tryno) {
   static const char *payload_null = "";
   std::map<struct proto_dport, std::vector<struct payload> >::iterator portPayloadIterator;
-  std::vector<struct payload> portPayloadVector;
   std::vector<struct payload>::iterator portPayloadVectorIterator;
   proto_dport key(IPPROTO_UDP, dport);
   int portPayloadVectorSize;
@@ -323,7 +322,7 @@ const char *udp_port2payload(u16 dport, size_t *length, u8 tryno) {
   portPayloadIterator = portPayloads.find(key);
 
   if (portPayloadIterator != portPayloads.end()) {
-    portPayloadVector = portPayloads.find(key)->second;
+    std::vector<struct payload>& portPayloadVector = portPayloads.find(key)->second;
     portPayloadVectorSize = portPayloadVector.size();
 
     tryno %= portPayloadVectorSize;
@@ -362,4 +361,18 @@ const char *get_udp_payload(u16 dport, size_t *length, u8 tryno) {
   } else {
     return udp_port2payload(dport, length, tryno);
   }
+}
+
+size_t udp_payload_count(u16 dport) {
+  std::map<struct proto_dport, std::vector<struct payload> >::iterator portPayloadIterator;
+  proto_dport key(IPPROTO_UDP, dport);
+  size_t portPayloadVectorSize = 0;
+
+  portPayloadIterator = portPayloads.find(key);
+
+  if (portPayloadIterator != portPayloads.end()) {
+    portPayloadVectorSize = portPayloadIterator->second.size();
+  }
+
+  return portPayloadVectorSize;
 }

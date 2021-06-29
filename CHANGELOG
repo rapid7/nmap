@@ -1,5 +1,102 @@
 #Nmap Changelog ($Id$); -*-text-*-
 
+o [GH#2269] Fix an issue with -sU where payload data went out-of-scope before
+  it was used, causing corrupted payloads to be sent. [Mariusz Ziulek]
+
+o [GH#2257] Fix an issue in addrset matching that was causing all targets to be
+  excluded if the --excludefile listed a CIDR range that contains an earlier,
+  smaller CIDR range. [Daniel Miller]
+
+o [NSE][GH#2237] Prevent the ssl-* NSE scripts from probing ports that were
+  excluded from version scan, usually 9100-9107, since JetDirect will print
+  anything sent to these ports. [Daniel Miller]
+
+o Nmap's retransmission limits were preventing some UDP payloads from being
+  tried with -sU and -PU. Now, Nmap ensures each payload for a particular port
+  is sent at least once, unless --max-retries prevents it. [Daniel Miller]
+
+o [GH#2206] Nmap no longer produces cryptic message "Failed to convert
+  source address to presentation format" when unable to find useable route
+  to the target. [nnposter]
+
+o [Ncat][GH#2202] Use safety-checked versions of FD_* macros to abort early if
+  number of connections exceeds FD_SETSIZE. [Pavel Zhukov]
+
+o [Ncat] Connections proxied via SOCKS4/SOCKS5 were intermittently dropping
+  server data sent right after the connection got established, such as port
+  banners. [Sami Pönkänen]
+
+o Nmap will now output a list of port numbers for each "ignored" state in the
+  "extrareasons" element in XML output. The "All X ports" and "Not shown:" lines
+  in normal output have been changed slightly to provide more detail. [Daniel Miller]
+
+o New script port-states will print a list of ports that were found in each
+  state, including states that were summarized as "Not shown: X closed ports"
+  [Daniel Miller]
+
+o New Nmap option --unique will prevent Nmap from scanning the same IP address
+  twice, which can happen when different names resolve to the same address. [Daniel Miller]
+
+o [NSE][GH#2175] Fixed NSE so it will not consolidate all port script output
+  for targets which share an IP (e.g. HTTP vhosts) under one target. [Daniel Miller]
+
+o [Zenmap][GH#2157] Fixed an issue where a failure to execute Nmap would result
+  in a Zenmap crash with "TypeError: coercing to Unicode" exception.
+
+o Nmap no longer considers an ICMP Host Unreachable as confirmation that a
+  target is down, in accordance with RFC 1122 which says these errors may be
+  transient. Instead, the probe will be destroyed and other probes used to
+  determine aliveness. [Daniel Miller]
+
+o [NSE][GH#711] New script openflow-info gathers preferred and supported
+  protocol versions from OpenFlow devices [Jay Smith, Mak Kolybabi]
+
+o [NSE][GH#2201] New script nbns-interfaces queries NetBIOS name service (NBNS)
+  to gather IP addresses of the target's network interfaces [Andrey Zhukov]
+
+o New UDP payloads:
+  + [GH#1279] TS3INIT1 for UDP 3389 [colcrunch]
+  + [GH#1895] DTLS for UDP 3391 (RD Gateway) [Arnim Rupp]
+
+o [Ncat][GH#2154] Ncat no longer crashes when used with Unix domain sockets.
+
+o [Ncat][GH#2167][GH#2168] Ncat is now again generating certificates
+  with the duration of one year. Due to a bug, recent versions of Ncat were
+  using only one minute. [Tobias Girstmair]
+
+o [NSE][GH#2174] Script hostmap-crtsh got improved in several ways. The most
+  visible are that certificate SANs are properly split apart and that
+  identities that are syntactically incorrect to be hostnames are now ignored.
+  [Michel Le Bihan, nnposter]
+
+o [GH#2199] Updated Nmap's NPSL license to rewrite a poorly-worded
+  clause which many folks interpreted as a "field of endeavor
+  restriction" related to "proprietary software companies".  We are
+  retroactively offering Nmap versions 7.90 and 7.91 under this new
+  Version 0.93 of the NPSL so that users and distributors may choose
+  either version of the license.
+
+o [NSE] Loading of a Nikto database failed if the file was referenced
+  relative to the Nmap directory [nnposter]
+
+o [NSE][GH#2208][GH#2203] SMB2 dialect handling has been redesigned. Visible
+  changes include:
+  * Notable improvement in speed of script smb-protocols and others
+  * Some SMB scripts are no longer using a hardcoded dialect, improving
+    target interoperability
+  * Dialect names are aligned with Microsoft, such as 3.0.2, instead of 3.02
+  [nnposter]
+
+o [NSE] Script smb2-vuln-uptime no longer reports false positives when
+  the target does not provide its boot time. [nnposter]
+
+o [NSE][GH#2197] Client packets composed by the DHCP library will now contain
+  option 51 (IP address lease time) only when requested. [nnposter]
+
+o [NSE][GH#2192] XML decoding in library citrixxml no longer crashes when
+  encountering a character reference with codepoint greater than 255. (These
+  references are now left unmodified.) [nnposter]
+
 o [NSE] Script mysql-audit now defaults to the bundled mysql-cis.audit for
   the audit rule base. [nnposter]
 
@@ -8,19 +105,19 @@ o [NSE][GH#1473] It is now possible to control whether the SNMP library uses
 
 Nmap 7.91 [2020-10-09]
 
+o [NSE][GH#2136][GH#2137] Fix several places where Lua's os.time was being used
+  to represent dates prior to January 1, 1970, which fails on Windows. Notably,
+  NSE refused to run in UTC+X timezones with the error "time result cannot be
+  represented in this installation" [Clément Notin, nnposter, Daniel Miller]
+
 o [GH#2148][Zenmap] Fix a crash in the profile editor due to a missing import.
 
 o [GH#2139][Nsock][Windows] Demote the IOCP Nsock engine because of some known
   issues that will take longer to resolve. The previous default "poll" engine
   will be used instead.
 
-o [GH#2138][Nsock][Windows] Fix a crash in service scan due to a previously-unknown
+o [GH#2140][Nsock][Windows] Fix a crash in service scan due to a previously-unknown
   error being returned from the IOCP Nsock engine. [Daniel Miller]
-
-o [NSE][GH#2136][GH#2137] Fix several places where Lua's os.time was being used
-  to represent dates prior to January 1, 1970, which fails on Windows. Notably,
-  NSE refused to run in UTC+X timezones with the error "time result cannot be
-  represented in this installation" [Clément Notin, nnposter, Daniel Miller]
 
 o [NSE][GH#2128] MySQL library was not properly parsing server responses,
   resulting in script crashes. [nnposter]
