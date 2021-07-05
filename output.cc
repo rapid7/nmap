@@ -524,16 +524,94 @@ void printportoutput(Target *currenths, PortList *plist) {
   int colno = 0;
   unsigned int rowno;
   int numrows;
-  int numignoredports = plist->numIgnoredPorts();
-  int numports = plist->numPorts();
   state_reason_summary_t *reasons, *currentr;
 
   std::vector<const char *> saved_servicefps;
+
+  int numignoredports = plist->numIgnoredPorts();
+  int numports = plist->numPorts();
 
   if (o.noportscan || numports == 0)
     return;
 
   xml_start_tag("ports");
+  bool udpProbeDidNotReceiveResponse = false;
+  int udpPortsClosed = 0;
+  int udpPortsOpen = 0;
+  int udpPorts = 0;
+
+
+  current = NULL;
+  while ((current = plist->nextPort(current, &port, IPPROTO_UDP, 0)) != NULL) {
+    udpPorts++;
+    switch (current->state) {
+      case PORT_CLOSED:
+        udpPortsClosed++;
+        break;
+      case PORT_OPEN:
+        udpPortsOpen++;
+        break;
+      case PORT_OPENFILTERED:
+        switch(current->portno) {
+          case 7:     // ECHO (RFC 862)
+          case 11:    // DAYTIME    (RFC 867) (no data sent, current date/time returned)
+          case 18:    // QUOTD      (RFC 865) (no data sent, quote of the day returned)
+          case 19:    // CHARGEN    (RFC 864) (no data sent, random data returned)
+          case 37:    // TIMESERVER (RFC 868) (no data sent, current date/time returned)
+          case 53:    // DNS (RFC 1035)
+          case 69:    // TFTP
+          case 111:   // RPC (RFC 1831, 1833)
+          case 123:   // NTP (RFC 1305)
+          case 135:   // DCE-RPC
+          case 137:   // CIFS-NS
+          case 177:   // XDMCP
+          case 500:   // ISAKMPD
+          case 1434:  // MSSQL Monitor
+          case 1701:  // L2TP (RFC 2661)
+          case 2049:  // NFS
+          case 4045:  // NFS LOCKD
+          case 4500:  // NAT-T (RFC 3947)
+          case 5353:  // iChat Rendezvous MDNS
+          case 5632:  // PC-Anywhere
+          case 7777:  // Unreal Tournament 2003
+          case 17185: // VxWorks debug
+          case 26198: // DNS
+          case 27444: // Trin00 Unix Daemon
+          case 31337: // BackOrifice
+          case 34555: // Trin00 Windows Daemon
+            udpProbeDidNotReceiveResponse = true;
+            break;
+        }
+        break;
+    }
+  }
+
+
+  double udpResponses = udpPortsClosed + udpPortsOpen;
+  double udpResponseRatio = udpResponses / udpPorts;
+  double udpClosedRatio = ((double) udpPortsClosed) / udpPorts;
+  bool udpPortWithOpenOrFilteredStateIsOpenState;
+
+
+  if ((udpClosedRatio < 0.20) && (udpResponseRatio < 0.75) &&
+      ((udpPorts > 25) || udpProbeDidNotReceiveResponse))
+    udpPortWithOpenOrFilteredStateIsOpenState = false;
+  else
+    udpPortWithOpenOrFilteredStateIsOpenState = true;
+
+
+  bool udpOpenOrFilteredFound;
+  do {
+    udpOpenOrFilteredFound = false;
+    current = NULL;
+    while ((current = plist->nextPort(current, &port, IPPROTO_UDP, PORT_OPENFILTERED)) != NULL)
+      if (current->state == PORT_OPENFILTERED) {
+        if (!udpPortWithOpenOrFilteredStateIsOpenState || current->portno != 161) {
+          plist->setPortState(current->portno, current->proto, PORT_FILTERED);
+          udpOpenOrFilteredFound = true;
+        }
+      }
+  } while (udpOpenOrFilteredFound);
   log_write(LOG_MACHINE, "Host: %s (%s)", currenths->targetipstr(),
             currenths->HostName());
 
@@ -2523,7 +2601,7 @@ void printfinaloutput() {
       && !o.scriptupdatedb
 #endif
       )
-    error("WARNING: No targets were specified, so 0 hosts scanned.");
+    // error("WARNING: No targets were specified, so 0 hosts scanned.");
   if (o.numhosts_scanned == 1 && o.numhosts_up == 0 && !o.listscan &&
       o.pingtype != PINGTYPE_NONE)
     log_write(LOG_STDOUT, "Note: Host seems down. If it is really up, but blocking our ping probes, try -Pn\n");
