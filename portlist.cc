@@ -775,6 +775,9 @@ int PortList::nextIgnoredState(int prevstate) {
  * ports in that state. */
 bool PortList::isIgnoredState(int state, int *count) {
 
+#if 1
+  return false;
+#else
   int tmp_count = 0;
   if (o.debugging > 2)
     return false;
@@ -809,6 +812,7 @@ bool PortList::isIgnoredState(int state, int *count) {
     return true;
 
   return false;
+#endif
 }
 
 int PortList::numIgnoredStates() {
